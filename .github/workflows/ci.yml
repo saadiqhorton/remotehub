@@ -1,7 +1,6 @@
-# CI for the public repository, on GitHub-hosted runners only.
-# The other workflows run on a private self-hosted runner and only in the private
-# development repository; they skip themselves everywhere else. This one is the reverse.
-name: public-ci
+# CI on GitHub-hosted runners: secret scan, Node tests with a production audit gate,
+# and the Rust agent on Linux, macOS, and Windows.
+name: ci
 on:
   pull_request:
   push:
@@ -10,12 +9,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: public-ci-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   secrets:
     name: Secret scan
-    if: github.repository != 'saadiqhorton/remote-hub'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -27,7 +25,6 @@ jobs:
         run: docker run --rm -v "$PWD":/repo:ro zricethezav/gitleaks:v8.21.2 git /repo --config /repo/.gitleaks.toml --redact --no-banner
   node:
     name: Node tests
-    if: github.repository != 'saadiqhorton/remote-hub'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,7 +40,6 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
   agent:
     name: Rust agent (${{ matrix.os }})
-    if: github.repository != 'saadiqhorton/remote-hub'
     strategy:
       fail-fast: false
       matrix:

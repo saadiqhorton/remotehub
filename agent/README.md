@@ -67,9 +67,8 @@ cargo build --release --target x86_64-unknown-linux-gnu     # Linux
 Install a target with `rustup target add <triple>` before cross-compiling, and note
 that the MSVC target additionally needs the MSVC build tools.
 
-`.github/workflows/agent.yml` runs `cargo test` and a release build on
-`ubuntu-latest`, `macos-latest`, and `windows-latest` for every change under
-`agent/`.
+`.github/workflows/ci.yml` runs Clippy and `cargo test` on `ubuntu-latest`,
+`macos-latest`, and `windows-latest` for every pull request and push to `main`.
 
 ## Usage
 

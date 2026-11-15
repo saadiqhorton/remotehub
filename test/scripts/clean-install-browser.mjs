@@ -1,4 +1,4 @@
-// SAA-348 (#27): clean-install browser check used by .github/workflows/clean-install.yml.
+// SAA-348 (#27): clean-install browser check for a clean-install acceptance run.
 // Against a RemoteHub started with plain `npm start`: first-run setup with the printed setup code,
 // add an SSH host, connect, type, then click Desktop.
 //   BASE (default http://127.0.0.1:8090), DATA_DIR (where SETUP-CODE.txt is), SSH_PORT, SSH_PASSWORD,
