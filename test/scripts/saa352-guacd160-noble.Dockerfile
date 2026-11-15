@@ -1,4 +1,4 @@
-# Mirrors .github/workflows/clean-install.yml: guacd 1.6.0 from source on Ubuntu 24.04 FreeRDP 3.
+# guacd 1.6.0 from source on Ubuntu 24.04 FreeRDP 3.
 FROM ubuntu:24.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl build-essential \
     libcairo2-dev libjpeg-turbo8-dev libpng-dev libtool-bin uuid-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
