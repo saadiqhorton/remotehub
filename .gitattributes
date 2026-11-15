@@ -1,0 +1,2 @@
+# Preserve the official Apache license verbatim, including its final blank line.
+public/vendor/guacamole/LICENSE whitespace=-blank-at-eof

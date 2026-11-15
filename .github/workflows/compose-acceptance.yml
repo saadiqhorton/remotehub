@@ -1,0 +1,243 @@
+# Run RemoteHub + pinned guacd in Compose, then drive the controlled SSH/SFTP fixture
+# and real VNC/RDP desktops from a browser. The SAA-352 steps check automatic fixed-size fallback on a refusing target and normal resizing on xrdp.
+name: compose-acceptance
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  compose-acceptance:
+    if: >-
+      github.repository == 'saadiqhorton/remote-hub' &&
+      github.actor == 'saadiqhorton' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login == 'saadiqhorton' &&
+        (github.event.pull_request.head.ref == 'feat/saa-301-docker-compose' ||
+        github.event.pull_request.head.ref == 'feat/official-guacamole-client' || (github.event.pull_request.number == 35 && github.event.pull_request.head.ref == 'feat/oauth-mcp-connected-host-tools'))) ||
+       (github.event_name != 'pull_request' &&
+        (github.ref == 'refs/heads/main' ||
+         (github.ref == 'refs/heads/feat/saa-301-docker-compose' ||
+         github.ref == 'refs/heads/feat/official-guacamole-client'))))
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+    concurrency:
+      group: coder-host-virtual-compose
+      cancel-in-progress: false
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash deploy/ci-vm.sh step {0}
+    env:
+      SSH_PORT: "2222"
+      SSH_PASSWORD: ci-ssh-password-1
+      OWNER_PASSWORD: ci-owner-password-1
+      OUT: compose-acceptance-shots
+      VNC_PORT: "15901"
+      VNC_PASSWORD: civnc123
+      RDP_PORT: "13389"
+      RDP_USER: rdpci
+      RDP_PASSWORD: Ci-rdp-pass-1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify runner and create a disposable Ubuntu guest
+        shell: bash
+        env:
+          ASSIGNED_RUNNER: ${{ runner.name }}
+        run: |
+          test "$ASSIGNED_RUNNER" = coder-host
+          bash deploy/ci-vm.sh init
+      - name: Install RemoteHub dependencies and browser
+        run: |
+          npm ci
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Start the SSH/SFTP fixture on the runner
+        run: |
+          HARNESS_SSH_HOST=0.0.0.0 HARNESS_SSH_PASSWORD="$SSH_PASSWORD" \
+            nohup node harness/ssh-server.js "$SSH_PORT" > ssh-server.log 2>&1 &
+          for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/"$SSH_PORT") 2>/dev/null && break; sleep 0.2; done
+          (exec 3<>/dev/tcp/127.0.0.1/"$SSH_PORT")
+      # Runner-only fixtures; do not run this setup on a user's computer.
+      - name: Start the real VNC desktop fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11vnc xterm xclip
+          mkdir -p "$HOME/vnchome"
+          nohup Xvfb :91 -screen 0 1024x768x24 -nolisten tcp -noreset > "$HOME/xvfb.log" 2>&1 &
+          sleep 1
+          (cd "$HOME/vnchome" && DISPLAY=:91 nohup xterm -geometry 100x30+20+20 -bg navy -fg white -e /bin/sh > "$HOME/xterm.log" 2>&1 &)
+          x11vnc -storepasswd "$VNC_PASSWORD" "$HOME/vncpass"
+          nohup x11vnc -display :91 -rfbport "$VNC_PORT" -rfbauth "$HOME/vncpass" -forever -shared -noxdamage -no6 > "$HOME/x11vnc.log" 2>&1 &
+          for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/"$VNC_PORT") 2>/dev/null && break; sleep 0.2; done
+          (exec 3<>/dev/tcp/127.0.0.1/"$VNC_PORT")
+      # Runner-only fixture; this runs xrdp/xorgxrdp with a disposable test account.
+      - name: Start the real RDP desktop fixture
+        run: |
+          sudo apt-get install -y xrdp xorgxrdp dbus-x11 xclip
+          sudo adduser xrdp ssl-cert
+          sudo useradd -m -s /bin/bash "$RDP_USER"
+          echo "$RDP_USER:$RDP_PASSWORD" | sudo chpasswd
+          printf 'exec xterm -geometry 120x40+0+0 -bg darkgreen -fg white\n' | sudo tee "/home/$RDP_USER/.xsession" > /dev/null
+          sudo chown "$RDP_USER:$RDP_USER" "/home/$RDP_USER/.xsession"
+          sudo chmod 755 "/home/$RDP_USER"
+          sudo sed -i "s#^port=3389#port=tcp://0.0.0.0:$RDP_PORT#" /etc/xrdp/xrdp.ini
+          sudo systemctl restart xrdp-sesman xrdp
+          for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/"$RDP_PORT") 2>/dev/null && break; sleep 0.2; done
+          (exec 3<>/dev/tcp/127.0.0.1/"$RDP_PORT")
+      - name: Start RemoteHub and guacd with Docker Compose
+        run: docker compose -f compose.yaml -f deploy/compose-ci.yaml up --build -d --wait
+      - name: Verify RDP and VNC plugin handshakes and read setup code
+        run: |
+          docker compose -f compose.yaml -f deploy/compose-ci.yaml exec -T remotehub node server/guacd-check.js
+          docker compose -f compose.yaml -f deploy/compose-ci.yaml exec -T -e GUACD_HEALTH_PROTOCOL=vnc remotehub node server/guacd-check.js
+          mkdir -p data
+          docker compose -f compose.yaml -f deploy/compose-ci.yaml exec -T remotehub \
+            node -e "process.stdout.write(require('node:fs').readFileSync('/app/data/SETUP-CODE.txt'))" > data/SETUP-CODE.txt
+      - name: Verify Secure-cookie and forwarded-header policy in isolated Compose project
+        run: |
+          export SESSION_COOKIE_SECURE=true REMOTEHUB_PORT=8091
+          docker compose -p remotehub-secure-cookie -f compose.yaml -f deploy/compose-ci.yaml up --build -d --wait
+          mkdir -p data-secure
+          docker compose -p remotehub-secure-cookie -f compose.yaml -f deploy/compose-ci.yaml exec -T remotehub \
+            node -e "process.stdout.write(require('node:fs').readFileSync('/app/data/SETUP-CODE.txt'))" > data-secure/SETUP-CODE.txt
+          BASE=http://127.0.0.1:8091 DATA_DIR=data-secure node test/scripts/compose-proxy-cookie.mjs
+      - name: Tear down isolated Secure-cookie Compose project
+        if: always()
+        run: |
+          docker compose -p remotehub-secure-cookie -f compose.yaml -f deploy/compose-ci.yaml down -v --remove-orphans
+          rm -f data-secure/SETUP-CODE.txt
+          rmdir data-secure 2>/dev/null || true
+      - name: "Browser acceptance: controlled SSH/SFTP fixture and real VNC through Compose"
+        run: |
+          SSH_ADDR=host.docker.internal VNC_ADDR=host.docker.internal EXPECT_SECURE_COOKIE=false \
+            VNC_MARKER_FILE="$HOME/vnchome/vnc-marker.txt" DESKTOPS=vnc \
+            EXPECT_DESKTOP=real BASE=http://127.0.0.1:8090 DATA_DIR=data \
+            node test/scripts/clean-install-browser.mjs
+      # All RDP checks block CI, including picture updates.
+      - name: "Browser acceptance: real RDP through Compose"
+        run: |
+          RDP_ADDR=host.docker.internal RDP_MARKER_FILE="/home/$RDP_USER/rdp-marker.txt" \
+            DESKTOPS=rdp OUT="$OUT/rdp" SUMMARY_TITLE='RDP through Compose (SAA-352)' \
+            EXPECT_DESKTOP=real BASE=http://127.0.0.1:8090 DATA_DIR=data \
+            node test/scripts/clean-install-browser.mjs
+      # CI-only SAA-352 fixture: xrdp relaying to an Xvnc that refuses resizes. Never run on a user's computer.
+      - name: "Start the SAA-352 refusing RDP fixture (xrdp relaying to an Xvnc that refuses resizes)"
+        run: |
+          docker build --build-arg RDP_PASSWORD="$RDP_PASSWORD" -t remotehub-ci/saa352-refuse -f test/scripts/saa352-xrdp-refuse.Dockerfile test/scripts
+          NET=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$(docker compose -f compose.yaml -f deploy/compose-ci.yaml ps -q guacd)")
+          docker run -d --name saa352-refuse --network "$NET" remotehub-ci/saa352-refuse
+          for i in $(seq 1 60); do docker run --rm --network "$NET" alpine/socat -T2 - TCP:saa352-refuse:3389,connect-timeout=1 </dev/null >/dev/null 2>&1 && break; sleep 1; done
+          docker run --rm --network "$NET" alpine/socat -T2 - TCP:saa352-refuse:3389,connect-timeout=1 </dev/null >/dev/null 2>&1
+      - name: "Browser: RDP resize refused → automatic fixed-size fallback, picture stays live (SAA-352)"
+        id: saa352_resize_fallback
+        run: |
+          EXPECT_FALLBACK=1 BASE=http://127.0.0.1:8090 DATA_DIR=data OWNER_PASSWORD="$OWNER_PASSWORD" \
+            RDP_ADDR=saa352-refuse RDP_PORT=3389 RDP_USER="$RDP_USER" RDP_PASSWORD="$RDP_PASSWORD" \
+            SHOT="$OUT/saa352-refuse.png" node test/scripts/saa352-browser-resize-probe.mjs
+      - name: Capture SAA-352 container diagnostics after failure
+        if: ${{ failure() && steps.saa352_resize_fallback.outcome == 'failure' }}
+        run: |
+          diagnostics=compose-acceptance-diagnostics
+          mkdir -p "$diagnostics"
+          guacd_id=$(docker compose -f compose.yaml -f deploy/compose-ci.yaml ps -q guacd 2>/dev/null || true)
+          : > "$diagnostics/container-status.txt"
+          capture_container() {
+            local label="$1" container="$2"
+            if [[ -z "$container" ]]; then
+              printf '%s: container unavailable\n' "$label" >> "$diagnostics/container-status.txt"
+              return 0
+            fi
+            if ! docker inspect --format '{{.Name}} status={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} error={{.State.Error}} started_at={{.State.StartedAt}} finished_at={{.State.FinishedAt}} restart_count={{.RestartCount}}' "$container" >> "$diagnostics/container-status.txt" 2>&1; then
+              printf '%s: container inspection failed\n' "$label" >> "$diagnostics/container-status.txt"
+              return 0
+            fi
+            if ! docker logs --timestamps --tail 2000 "$container" > "$diagnostics/$label.log" 2>&1; then
+              printf '\n[docker logs returned a nonzero status]\n' >> "$diagnostics/$label.log"
+            fi
+          }
+          capture_container saa352-refuse saa352-refuse
+          capture_container guacd "$guacd_id"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          passwords = [os.environ.get(key, '') for key in ('SSH_PASSWORD', 'OWNER_PASSWORD', 'RDP_PASSWORD', 'VNC_PASSWORD')]
+          for path in Path('compose-acceptance-diagnostics').glob('*'):
+              if path.is_file() and not path.is_symlink():
+                  text = path.read_text(errors='replace')
+                  for password in passwords:
+                      if password:
+                          text = text.replace(password, '(password removed)')
+                  path.write_text(text)
+          PY
+      - name: "Browser: normal xrdp resizing still follows the browser (SAA-352)"
+        run: |
+          EXPECT_FALLBACK=0 BASE=http://127.0.0.1:8090 DATA_DIR=data OWNER_PASSWORD="$OWNER_PASSWORD" \
+            RDP_ADDR=host.docker.internal RDP_PORT="$RDP_PORT" RDP_USER="$RDP_USER" RDP_PASSWORD="$RDP_PASSWORD" \
+            SHOT="$OUT/saa352-xrdp-normal.png" node test/scripts/saa352-browser-resize-probe.mjs
+      # Rotate the real xrdp TLS identity inside the disposable guest. The certificate and key are
+      # readable by the xrdp group, and the next browser step must exercise RemoteHub's owner prompt.
+      - name: "Rotate the real xrdp TLS certificate in the disposable guest"
+        run: |
+          cert=/etc/xrdp/remotehub-ci-rotation-cert.pem
+          key=/etc/xrdp/remotehub-ci-rotation-key.pem
+          tempdir=$(mktemp -d)
+          trap 'rm -rf "$tempdir"' EXIT
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$tempdir/key.pem" -out "$tempdir/cert.pem" \
+            -days 1 -subj '/CN=remotehub-ci-rotated-xrdp'
+          sudo install -o root -g xrdp -m 0640 "$tempdir/cert.pem" "$cert"
+          sudo install -o root -g xrdp -m 0640 "$tempdir/key.pem" "$key"
+          sudo sed -i \
+            -e "s#^certificate=.*#certificate=$cert#" \
+            -e "s#^key_file=.*#key_file=$key#" \
+            /etc/xrdp/xrdp.ini
+          sudo systemctl restart xrdp
+          for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/"$RDP_PORT") 2>/dev/null && break; sleep 0.2; done
+          (exec 3<>/dev/tcp/127.0.0.1/"$RDP_PORT")
+          sudo systemctl is-active --quiet xrdp
+      - name: "Browser: changed RDP certificate requires explicit owner trust (SAA-304)"
+        run: |
+          RDP_HOST_NAME='CI RDP' RDP_MARKER_FILE="/home/$RDP_USER/rdp-cert-rotation-marker.txt" \
+            OWNER_PASSWORD="$OWNER_PASSWORD" RDP_PASSWORD="$RDP_PASSWORD" \
+            BASE=http://127.0.0.1:8090 DATA_DIR=data OUT="$OUT/rdp" \
+            node test/scripts/rdp-cert-rotation-browser.mjs
+      # Persistence: data written by the browser steps must survive a container recreate. No -v, so the named volume is kept.
+      - name: "Persistence: owner account and data survive a Compose recreate without deleting the volume"
+        run: |
+          DATA_FILE=/app/data/remotehub.json
+          HASH_BEFORE=$(docker compose -f compose.yaml -f deploy/compose-ci.yaml exec -T remotehub sha256sum "$DATA_FILE")
+          test -n "$HASH_BEFORE" || { echo "Could not hash $DATA_FILE in the RemoteHub container before the recreate." >&2; exit 1; }
+          docker rm -f saa352-refuse
+          docker compose -f compose.yaml -f deploy/compose-ci.yaml down
+          docker compose -f compose.yaml -f deploy/compose-ci.yaml up -d --wait
+          HASH_AFTER=$(docker compose -f compose.yaml -f deploy/compose-ci.yaml exec -T remotehub sha256sum "$DATA_FILE")
+          test -n "$HASH_AFTER" || { echo "Could not hash $DATA_FILE in the RemoteHub container after the recreate." >&2; exit 1; }
+          test "$HASH_BEFORE" = "$HASH_AFTER" || { echo "$DATA_FILE changed across the recreate: before=$HASH_BEFORE after=$HASH_AFTER" >&2; exit 1; }
+          STATE=$(curl -fsS http://127.0.0.1:8090/api/auth/state)
+          node -e 'if (JSON.parse(process.argv[1]).setupRequired !== false) { console.error("Owner account is not set up after the recreate: " + process.argv[1]); process.exit(1); }' "$STATE"
+      - name: Copy only screenshots and sanitized logs from the guest
+        if: always()
+        shell: bash
+        run: bash deploy/ci-vm.sh collect
+      - name: Upload protocol acceptance screenshots, SSH fixture log, and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-acceptance
+          path: |
+            compose-acceptance-shots
+            compose-acceptance-diagnostics
+            ssh-server.log
+      - name: Stop the Compose stack
+        if: always()
+        run: |
+          docker rm -f saa352-refuse >/dev/null 2>&1 || true
+          docker compose -f compose.yaml -f deploy/compose-ci.yaml down -v
+      - name: Destroy the entire guest, including fixtures, even on failure
+        if: always()
+        shell: bash
+        run: bash deploy/ci-vm.sh destroy

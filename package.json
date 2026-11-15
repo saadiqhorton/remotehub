@@ -1,0 +1,31 @@
+{
+  "name": "remotehub",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Self-hosted browser workspace for SSH terminals, SFTP files, and VNC/RDP desktops.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "start": "node harness/node-check.js && node --env-file-if-exists=.env server/index.js",
+    "dev": "node harness/node-check.js && node --watch --env-file-if-exists=.env server/index.js",
+    "reset-owner": "node harness/node-check.js && node --env-file-if-exists=.env server/cli.js reset-owner",
+    "guacd:check": "node harness/node-check.js && node --env-file-if-exists=.env server/guacd-check.js",
+    "test": "node harness/node-check.js && node harness/run-tests.js --test-timeout=120000 \"test/*.test.js\"",
+    "harness": "node harness/node-check.js && node harness/cli.js",
+    "doctor": "node harness/node-check.js && node harness/doctor.js",
+    "build-agent": "node harness/node-check.js && node harness/build-agent.js",
+    "test:clean": "node harness/node-check.js && node harness/check-clean.js"
+  },
+  "dependencies": {
+    "@fontsource/space-grotesk": "^5.3.0",
+    "@fontsource/space-mono": "^5.3.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "express": "^5.2.1",
+    "ssh2": "^1.17.0",
+    "ws": "^8.22.0"
+  }
+}

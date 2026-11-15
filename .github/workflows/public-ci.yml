@@ -1,0 +1,70 @@
+# CI for the public repository, on GitHub-hosted runners only.
+# The other workflows run on a private self-hosted runner and only in the private
+# development repository; they skip themselves everywhere else. This one is the reverse.
+name: public-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: public-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  secrets:
+    name: Secret scan
+    if: github.repository != 'saadiqhorton/remote-hub'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (full history, allowlist in .gitleaks.toml)
+        run: docker run --rm -v "$PWD":/repo:ro zricethezav/gitleaks:v8.21.2 git /repo --config /repo/.gitleaks.toml --redact --no-banner
+  node:
+    name: Node tests
+    if: github.repository != 'saadiqhorton/remote-hub'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+  agent:
+    name: Rust agent (${{ matrix.os }})
+    if: github.repository != 'saadiqhorton/remote-hub'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: agent
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Clippy
+        run: cargo clippy --all-targets
+      - name: Test
+        run: cargo test --all
+      - name: Test WASAPI silent-packet handling
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path vendor/wasapi/Cargo.toml --lib

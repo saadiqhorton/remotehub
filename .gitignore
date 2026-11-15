@@ -1,0 +1,12 @@
+node_modules/
+# Agent builds produced by `npm run build-agent` (per-platform binaries, not source).
+agent-build/
+data/
+.env
+.enjoy/
+.enjoy-logs/
+.check-data/
+.harness.local.json
+# SAA-348 test harness: local-only settings and any stray evidence
+evidence/
+*.harness.png

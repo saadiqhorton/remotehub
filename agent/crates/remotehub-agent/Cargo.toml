@@ -1,0 +1,27 @@
+[package]
+name = "remotehub-agent"
+description = "Cross-platform RemoteHub agent: one codebase for persistent service and temporary helper modes."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cap-std = "4.0.3"
+# Native filesystem notifications (inotify, FSEvents, ReadDirectoryChangesW) for SAA-297.
+notify = "6.1"
+ring = "0.17"
+rustls = { version = "0.23.25", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26.7"
+
+[target.'cfg(any(unix, windows))'.dependencies]
+command-group = "5.0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = "=0.3.0"
+core-media-rs = "0.3"
+core-foundation = "0.10"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.16"

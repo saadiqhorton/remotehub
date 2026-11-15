@@ -1,0 +1,208 @@
+# SAA-348 (#27): a clean install that follows only the README ("Run it": npm install, npm start)
+# on Linux, macOS and Windows, then a headless browser logs in, adds an SSH host, connects, types
+# and clicks Desktop. Linux builds the Compose-pinned guacd source on FreeRDP 3 (see the guacd step for why).
+# macOS and Windows have no guacd install yet (pending a Docker decision), so their
+# "Desktop works" step is marked known-failing with that reason, not skipped.
+name: clean-install
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  clean-install:
+    name: clean install (${{ matrix.os }})
+    if: >-
+      github.repository == 'saadiqhorton/remote-hub' &&
+      github.actor == 'saadiqhorton' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login == 'saadiqhorton' &&
+        (github.event.pull_request.head.ref == 'feat/saa-301-docker-compose' ||
+        github.event.pull_request.head.ref == 'feat/official-guacamole-client' || (github.event.pull_request.number == 35 && github.event.pull_request.head.ref == 'feat/oauth-mcp-connected-host-tools'))) ||
+       (github.event_name != 'pull_request' &&
+        (github.ref == 'refs/heads/main' ||
+         (github.ref == 'refs/heads/feat/saa-301-docker-compose' ||
+         github.ref == 'refs/heads/feat/official-guacamole-client'))))
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ matrix.os == 'ubuntu-latest' && 'coder-host-virtual-clean-install' || format('clean-install-{0}-{1}', matrix.os, github.run_id) }}
+      cancel-in-progress: false
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # macOS and Windows run only on workflow_dispatch, as manually triggered native-platform checks.
+      # To restore automatic runs, add them back to the PR branch of this expression once runner capacity is available.
+      matrix: >-
+        ${{
+          github.event_name == 'workflow_dispatch' &&
+          fromJSON('{"include":[{"os":"ubuntu-latest","runner":["self-hosted","Linux","X64"],"shell":"bash deploy/ci-vm.sh step {0}"},{"os":"macos-latest","runner":"macos-latest","shell":"bash"},{"os":"windows-latest","runner":"windows-latest","shell":"bash"}]}') ||
+          fromJSON('{"include":[{"os":"ubuntu-latest","runner":["self-hosted","Linux","X64"],"shell":"bash deploy/ci-vm.sh step {0}"}]}')
+        }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      SSH_PORT: "2222"
+      SSH_PASSWORD: ci-ssh-password-1
+      OWNER_PASSWORD: ci-owner-password-1
+      OUT: clean-install-shots
+      VNC_ADDR: 127.0.0.2
+      VNC_PORT: "15901"
+      VNC_PASSWORD: civnc123
+      RDP_ADDR: 127.0.0.2
+      RDP_PORT: "13389"
+      RDP_USER: rdpci
+      RDP_PASSWORD: Ci-rdp-pass-1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify runner and create a disposable Ubuntu guest
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ASSIGNED_RUNNER: ${{ runner.name }}
+        run: |
+          test "$ASSIGNED_RUNNER" = coder-host
+          bash deploy/ci-vm.sh init
+      - uses: actions/setup-node@v4
+        if: runner.os != 'Linux'
+        with:
+          node-version-file: .nvmrc
+      # Runner only. guacd is built from source here, not Docker: simpler, closer to SAA-353, and it tests
+      # RemoteHub's own RDP password box (the Docker image uses FreeRDP 2, which never asks for it).
+      # Test setup only; users don't build this.
+      - name: Build and start the Compose-pinned guacd on FreeRDP 3 (test setup only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libcairo2-dev libjpeg-turbo8-dev libpng-dev libtool-bin uuid-dev \
+            freerdp3-dev libvncserver-dev libssl-dev libwebp-dev libpulse-dev libpango1.0-dev
+          # Same immutable source as compose.yaml: includes GUACAMOLE-2273's
+          # AuthenticateEx support required by current Ubuntu FreeRDP packages.
+          GUACD_COMMIT=ecca029b13c36fc9dba0f7f6b897eaf952239c22
+          curl -fsSL "https://github.com/apache/guacamole-server/archive/$GUACD_COMMIT.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/guacamole-server-$GUACD_COMMIT"
+          autoreconf -fi > autoreconf.log 2>&1 || { tail -50 autoreconf.log; exit 1; }
+          CFLAGS="-O2 -Wno-error=deprecated-declarations" ./configure --prefix="$RUNNER_TEMP/guacd" --with-freerdp-plugin-dir="$RUNNER_TEMP/guacd/lib/freerdp3" --disable-guacenc --disable-guaclog --without-ssh --without-telnet --without-kubernetes > configure.log 2>&1 || { tail -50 configure.log; exit 1; }
+          grep -E "RDP|VNC|FreeRDP" configure.log | tail -8
+          make -j"$(nproc)" > make.log 2>&1 || { tail -60 make.log; exit 1; }
+          make install > /dev/null
+          "$RUNNER_TEMP/guacd/sbin/guacd" -v
+          test -f "$RUNNER_TEMP/guacd/lib/libguac-client-rdp.so"
+          test -f "$RUNNER_TEMP/guacd/lib/libguac-client-vnc.so"
+          ldd "$RUNNER_TEMP/guacd/lib/libguac-client-rdp.so" | grep -i freerdp
+          # Plugins dlopen libguac from the install prefix; without this path, select,rdp/vnc
+          # accepts TCP then never answers (RemoteHub reports guacd timeout / "plugin not installed").
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/guacd/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/desktop-logs"
+          nohup env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "$RUNNER_TEMP/guacd/sbin/guacd" -f -b 127.0.0.1 -l 4822 -L debug \
+            > "$GITHUB_WORKSPACE/desktop-logs/guacd.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/desktop-logs/guacd.pid"
+          for i in $(seq 1 100); do (exec 3<>/dev/tcp/127.0.0.1/4822) 2>/dev/null && break; sleep 0.3; done
+          (exec 3<>/dev/tcp/127.0.0.1/4822) || { cat "$GITHUB_WORKSPACE/desktop-logs/guacd.log"; exit 1; }
+          # Real Guacamole handshake (not just TCP). server/guacd.js only needs node:net.
+          for proto in rdp vnc; do
+            GUACD_ENABLED=1 GUACD_HEALTH_PROTOCOL="$proto" node "$GITHUB_WORKSPACE/server/guacd-check.js" \
+              || { echo "guacd handshake failed for $proto"; cat "$GITHUB_WORKSPACE/desktop-logs/guacd.log"; exit 1; }
+          done
+          echo "Compose-pinned guacd (FreeRDP 3) is ready for rdp and vnc on 127.0.0.1:4822"
+          echo "GUACD_ENABLED=1" >> "$GITHUB_ENV"
+      # Runner only, never run this locally: it starts system Xvfb/x11vnc and installs packages.
+      - name: Start a real VNC desktop on 127.0.0.2:15901 (Xvfb + xterm + x11vnc)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb x11vnc xterm xclip
+          mkdir -p "$HOME/vnchome"
+          nohup Xvfb :91 -screen 0 1024x768x24 -nolisten tcp -noreset > "$HOME/xvfb.log" 2>&1 &
+          sleep 1
+          (cd "$HOME/vnchome" && DISPLAY=:91 nohup xterm -geometry 100x30+20+20 -bg navy -fg white -e /bin/sh > "$HOME/xterm.log" 2>&1 &)
+          x11vnc -storepasswd "$VNC_PASSWORD" "$HOME/vncpass"
+          nohup x11vnc -display :91 -rfbport 15901 -listen 127.0.0.2 -rfbauth "$HOME/vncpass" -forever -shared -noxdamage -no6 > "$HOME/x11vnc.log" 2>&1 &
+          for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.2/15901) 2>/dev/null && break; sleep 0.2; done
+          (exec 3<>/dev/tcp/127.0.0.2/15901) && echo "VNC desktop is listening on 127.0.0.2:15901"
+      # Runner only, never run this locally: it edits /etc/xrdp and adds a system user.
+      - name: Start a real RDP desktop on 127.0.0.2:13389 (xrdp + xorgxrdp, an xterm session)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xrdp xorgxrdp dbus-x11 xclip
+          sudo adduser xrdp ssl-cert
+          sudo useradd -m -s /bin/bash "$RDP_USER"
+          echo "$RDP_USER:$RDP_PASSWORD" | sudo chpasswd
+          printf 'exec xterm -geometry 120x40+0+0 -bg darkgreen -fg white\n' | sudo tee "/home/$RDP_USER/.xsession" > /dev/null
+          sudo chown "$RDP_USER:$RDP_USER" "/home/$RDP_USER/.xsession"
+          sudo chmod 755 "/home/$RDP_USER"
+          sudo sed -i 's#^port=3389#port=tcp://127.0.0.2:13389#' /etc/xrdp/xrdp.ini
+          grep -nE '^(port|autorun|username|password)=' /etc/xrdp/xrdp.ini | sed 's/^\([0-9]*:password\)=.*/\1=(not shown)/'
+          sudo systemctl restart xrdp-sesman xrdp
+          for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.2/13389) 2>/dev/null && break; sleep 0.2; done
+          (exec 3<>/dev/tcp/127.0.0.2/13389) && echo "RDP desktop is listening on 127.0.0.2:13389"
+      - name: npm install (README "Run it")
+        run: npm install
+      - name: npm run doctor
+        run: npm run doctor
+      - name: Start the test SSH server (the project's own, no system sshd)
+        run: HARNESS_SSH_PASSWORD="$SSH_PASSWORD" nohup node harness/ssh-server.js "$SSH_PORT" > ssh-server.log 2>&1 &
+      - name: npm start (README "Run it")
+        run: nohup npm start > server.log 2>&1 &
+      - name: Wait for RemoteHub on port 8090
+        run: node -e "const n=require('net');let t=0;(function a(){const s=n.connect(8090,'127.0.0.1');s.on('connect',()=>process.exit(0));s.on('error',()=>{if(++t>150)process.exit(1);setTimeout(a,200)})})()"
+      - name: Install the headless browser
+        run: |
+          npm install --no-save playwright
+          npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - name: "Browser: log in, add SSH host, connect, type; VNC desktop renders and receives typing"
+        if: runner.os == 'Linux'
+        run: |
+          VNC_MARKER_FILE="$HOME/vnchome/vnc-marker.txt" DESKTOPS=vnc \
+            EXPECT_DESKTOP=real DATA_DIR=data node test/scripts/clean-install-browser.mjs
+      # Every RDP check blocks CI, including the picture changing after typing (SAA-352).
+      - name: "Browser: RDP desktop renders, picture stays live, typing arrives"
+        if: runner.os == 'Linux'
+        run: |
+          RDP_MARKER_FILE="/home/$RDP_USER/rdp-marker.txt" DESKTOPS=rdp OUT="$OUT/rdp" \
+            SUMMARY_TITLE='RDP desktop' \
+            EXPECT_DESKTOP=real DATA_DIR=data node test/scripts/clean-install-browser.mjs
+      - name: Collect desktop logs (password removed)
+        if: always() && runner.os == 'Linux'
+        run: |
+          mkdir -p desktop-logs
+          cp "$HOME/x11vnc.log" desktop-logs/ || true
+          sudo cp /var/log/xrdp.log /var/log/xrdp-sesman.log desktop-logs/ || true
+          sudo sh -c "cp /home/$RDP_USER/.xorgxrdp.*.log /home/$RDP_USER/.xsession-errors desktop-logs/" || true
+          sudo chown -R "$(id -u)" desktop-logs
+          # Never keep the password: replace it everywhere it could appear.
+          find desktop-logs -type f -exec sed -i "s/$RDP_PASSWORD/(password removed)/g; s/$VNC_PASSWORD/(password removed)/g" {} +
+          ls -la desktop-logs
+          test -s desktop-logs/guacd.log && echo "guacd.log present ($(wc -c < desktop-logs/guacd.log) bytes)" || echo "WARNING: guacd.log missing"
+          grep -hiE "resize|prohibit|security|negotiat|auth|login|error|Support for protocol" desktop-logs/* | tail -n 80 || true
+      - name: "Browser: log in, add SSH host, connect, type; Desktop shown as not available in plain words"
+        if: runner.os != 'Linux'
+        run: EXPECT_DESKTOP=off DATA_DIR=data node test/scripts/clean-install-browser.mjs
+      # Keep the Mac/Windows desktop assertions blocking; Linux cannot cover them.
+      - name: "${{ runner.os == 'macOS' && 'Mac' || 'Windows' }} desktop (not working yet, SAA-351)"
+        if: runner.os != 'Linux'
+        run: |
+          echo "::warning title=Desktop known to fail on ${{ runner.os }}::Desktop can't work on ${{ runner.os }} yet. RemoteHub's desktop helper (guacd) has no install for this system yet. This step is expected to fail."
+          SUMMARY_TITLE="${{ runner.os }} desktop (not working yet, SAA-351)" EXPECT_DESKTOP=works HOST_NAME='CI SSH 2' DATA_DIR=data OUT=clean-install-shots/known-failing node test/scripts/clean-install-browser.mjs
+      - name: Copy only screenshots and sanitized logs from the guest
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: bash deploy/ci-vm.sh collect
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-install-${{ matrix.os }}
+          path: |
+            clean-install-shots
+            server.log
+            ssh-server.log
+            desktop-logs
+      - name: Destroy the entire guest, including fixtures, even on failure
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: bash deploy/ci-vm.sh destroy

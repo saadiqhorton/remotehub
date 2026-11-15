@@ -1,0 +1,23 @@
+# RemoteHub agent workspace (SAA-294).
+#
+# A Cargo workspace so the agent's siblings can grow without reshuffling this
+# layout: the versioned control protocol (SAA-295), the native filesystem watcher
+# (SAA-297), the temporary-helper deployment plumbing (SAA-299), and the Windows
+# screen-capture prototype (SAA-307). The agent binary itself is a single crate
+# today and holds one codebase for both persistent and temporary modes.
+[workspace]
+resolver = "2"
+members = ["crates/remotehub-agent"]
+
+[workspace.package]
+version = "0.1.0"
+license = "MIT"
+edition = "2021"
+rust-version = "1.74"
+
+# The agent is a long-lived idle service; keep the release artifact small.
+[profile.release]
+strip = true
+
+[patch.crates-io]
+wasapi = { path = "vendor/wasapi" }

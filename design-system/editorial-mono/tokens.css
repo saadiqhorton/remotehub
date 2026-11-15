@@ -1,0 +1,79 @@
+/**
+ * Editorial Mono — Design tokens
+ * Source of truth (visual): https://app.paper.design/file/01M3QWCWJRM4T86M8X6Q46SQPY
+ * Synced from Paper contentHash tokens: 58c4211e
+ */
+
+:root {
+  /* Dark mode (default) */
+  --color-bg: #141412;
+  --color-surface: #1C1B18;
+  --color-border: #3D3A33;
+  --color-muted: #8C8474;
+  --color-cream: #EDE6D6;
+  --color-accent: #E6FF2B;
+
+  /* Light mode */
+  --color-light-bg: #EDE6D6;
+  --color-light-surface: #F7F2E8;
+  --color-light-border: #C9C0AE;
+  --color-light-muted: #6B6456;
+  --color-light-ink: #141412;
+  --color-light-accent: #E6FF2B;
+  --color-light-accent-ink: #3D4500;
+
+  /* Typography */
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "Space Mono", ui-monospace, monospace;
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 16px;
+  --text-lg: 24px;
+  --text-xl: 40px;
+  --text-display: 72px;
+  --font-weight-regular: 400;
+  --font-weight-bold: 700;
+  --tracking-tight: -0.03em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.14em;
+  --leading-tight: 100%;
+  --leading-normal: 150%;
+
+  /* Opacity */
+  --opacity-subtle: 12%;
+  --opacity-muted: 40%;
+
+  /* Layout */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1440px;
+  --container-sm: 384px;
+  --container-md: 640px;
+  --container-lg: 1024px;
+  --container-xl: 1280px;
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-12: 48px;
+  --spacing-20: 80px;
+  --radius-none: 0px;
+}
+
+/* Semantic aliases for light mode surfaces */
+[data-theme="light"] {
+  --color-bg: var(--color-light-bg);
+  --color-surface: var(--color-light-surface);
+  --color-border: var(--color-light-border);
+  --color-muted: var(--color-light-muted);
+  --color-cream: var(--color-light-ink);
+  --color-accent: var(--color-light-accent);
+  --color-accent-ink: var(--color-light-accent-ink);
+}
+
+[data-theme="dark"] {
+  --color-accent-ink: var(--color-accent);
+}

@@ -1,0 +1,86 @@
+# Starts the RemoteHub server and its pinned guacd build on the hosting computer.
+# Docker is not needed on any target computer.
+services:
+  remotehub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: remotehub/server:0.1.0
+    restart: unless-stopped
+    init: true
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8090"
+      DATA_DIR: /app/data
+      # Docker's published-port forwarding can make proxy and direct clients share a
+      # source address. Never trust forwarded headers on this Compose-published port.
+      TRUST_PROXY: "false"
+      # The default quick start is loopback HTTP. Set true in .env when TLS terminates
+      # at a reverse proxy; forwarded headers remain untrusted on this published port.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      MCP_COMMANDS_ENABLED: ${MCP_COMMANDS_ENABLED:-false}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      MAX_TERMINALS: ${MAX_TERMINALS:-16}
+      MAX_FILES: ${MAX_FILES:-16}
+      MAX_AGENTS: ${MAX_AGENTS:-32}
+      MAX_DESKTOPS: ${MAX_DESKTOPS:-8}
+      GUACD_ENABLED: "1"
+      GUACD_HOST: guacd
+      GUACD_PORT: "4822"
+      GUACD_HEALTH_PROTOCOL: ${GUACD_HEALTH_PROTOCOL:-rdp}
+      # Agent builds the server installs on a target computer ("Install agent on this
+      # computer"). Build them with `npm run build-agent`; the folder holds
+      # remotehub-agent-<os>-<arch> files. Unset disables the one-click install.
+      HELPER_DIR: ${HELPER_DIR:-/app/agent-build}
+    ports:
+      - "${REMOTEHUB_BIND_ADDRESS:-127.0.0.1}:${REMOTEHUB_PORT:-8090}:8090"
+    volumes:
+      - remotehub-data:/app/data
+      # Read-only agent builds; the server never writes here.
+      - ./agent-build:/app/agent-build:ro
+    depends_on:
+      guacd:
+        condition: service_healthy
+    networks:
+      - desktop
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/api/health').then(async r => { const body = await r.json(); if (!r.ok || !body.ok || !body.desktop?.healthy) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  guacd:
+    image: remotehub/guacd:1.6.1-ecca029b
+    build:
+      context: https://github.com/apache/guacamole-server.git#ecca029b13c36fc9dba0f7f6b897eaf952239c22
+      args:
+        FREERDP_VERSION: "3"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Verify the RDP plugin answers the Guacamole select/args handshake, not just TCP.
+      test: ["CMD-SHELL", "printf '6.select,3.rdp;' | nc -w 2 127.0.0.1 4822 | grep -q '4.args,'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - desktop
+
+networks:
+  # Private to this Compose project. No host port is published for guacd.
+  # This bridge deliberately allows outbound traffic so guacd can reach authorized
+  # RDP/VNC targets; the server and guacd are the only project members.
+  desktop:
+    driver: bridge
+
+volumes:
+  remotehub-data:

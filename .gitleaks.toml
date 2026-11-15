@@ -1,0 +1,7 @@
+# Secret scanning config for gitleaks (https://github.com/gitleaks/gitleaks).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Self-signed certificates and keys generated only for the RDP certificate-pinning tests (CN=remotehub-test-rdp-a/b). They protect nothing; see test/fixtures/rdp/README.txt."
+paths = ['''^test/fixtures/rdp/key-[ab]\.pem$''']

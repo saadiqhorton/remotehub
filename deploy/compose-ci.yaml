@@ -1,0 +1,9 @@
+# CI-only: let the server and guacd reach SSH/VNC/RDP fixtures started on the Linux runner.
+# Production deployments should use target machine addresses directly.
+services:
+  remotehub:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  guacd:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

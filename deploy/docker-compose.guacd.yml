@@ -1,0 +1,40 @@
+# guacd sidecar for RemoteHub Desktop (SAA-301).
+#
+#   docker compose -f deploy/docker-compose.guacd.yml up -d
+#
+# Then in RemoteHub's .env:  GUACD_ENABLED=1  (GUACD_HOST/GUACD_PORT default to 127.0.0.1:4822)
+# and check it with:         npm run guacd:check
+#
+# guacd has no authentication of its own: anything that can reach its port can ask it to
+# open RDP/VNC connections. Keep it bound to loopback (or a private Docker network) and
+# never publish it to the LAN or the internet. Only the RemoteHub server talks to guacd;
+# browsers never do.
+#
+# SAA-304: guacd is built from the exact guacamole-server source RemoteHub's RDP layer
+# was tested against (main @ ecca029b, configure version 1.6.1, protocol VERSION_1_5_0,
+# FreeRDP 3), not the 1.5.5 release image. The first `up` builds it (several minutes):
+#   docker compose -f deploy/docker-compose.guacd.yml up -d --build
+# See deploy/guacd.md "guacd version" before changing GUACD_SOURCE_COMMIT.
+services:
+  guacd:
+    image: remotehub/guacd:1.6.1-ecca029b
+    build:
+      # Upstream's own Dockerfile at the tested commit.
+      context: https://github.com/apache/guacamole-server.git#ecca029b13c36fc9dba0f7f6b897eaf952239c22
+      args:
+        FREERDP_VERSION: "3"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GUACD_PORT:-4822}:4822"
+    healthcheck:
+      # The image ships no client tools; a TCP check is the best available here.
+      # RemoteHub's own check (npm run guacd:check) does the full Guacamole handshake.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 4822 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

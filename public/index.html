@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>RemoteHub</title>
+  <link rel="icon" type="image/png" href="/favicon-remotehub.png">
+  <link rel="stylesheet" href="/vendor/fonts/space-grotesk/700.css">
+  <link rel="stylesheet" href="/vendor/fonts/space-mono/400.css">
+  <link rel="stylesheet" href="/vendor/fonts/space-mono/700.css">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+  <link rel="stylesheet" href="/css/app.css">
+  <script src="/vendor/guacamole/all.min.js"></script>
+  <script src="/vendor/xterm/lib/xterm.js" defer></script>
+  <script src="/vendor/xterm-fit/lib/addon-fit.js" defer></script>
+  <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+  <div id="boot" class="boot" aria-live="polite">RemoteHub</div>
+
+  <section id="auth-view" class="auth" hidden>
+    <div class="auth-inner">
+      <p class="brand">RemoteHub</p>
+      <h1 id="auth-title">Your machines, one tab away.</h1>
+      <p id="auth-lede" class="lede">Log in to open terminals on your network.</p>
+      <form id="auth-form" class="auth-form" novalidate>
+        <label class="field" id="setup-code-field" hidden>
+          <span class="label">Setup code</span>
+          <input id="setup-code" name="setupCode" autocomplete="one-time-code" spellcheck="false" placeholder="XXXX-XXXX">
+          <span class="hint">Printed in the server console and saved in <code>data/SETUP-CODE.txt</code>.</span>
+        </label>
+        <label class="field">
+          <span class="label" id="password-label">Password</span>
+          <input id="auth-password" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <label class="field" id="confirm-field" hidden>
+          <span class="label">Confirm password</span>
+          <input id="auth-confirm" name="confirm" type="password" autocomplete="new-password">
+        </label>
+        <p id="auth-error" class="form-error" role="alert" hidden></p>
+        <button type="submit" class="btn btn-primary" id="auth-submit">Log in</button>
+      </form>
+    </div>
+  </section>
+
+  <div id="app-view" class="app" hidden>
+    <header class="topbar">
+      <span class="brand">RemoteHub</span>
+      <span id="session-count" class="topbar-meta">No sessions</span>
+      <div class="topbar-actions">
+        <button type="button" class="btn btn-small" id="launcher-btn" title="Jump to a computer (Ctrl+Shift+K)">
+          Jump <kbd>Ctrl ⇧ K</kbd>
+        </button>
+        <button type="button" class="btn btn-small" id="focus-btn" aria-pressed="false">Focus terminal</button>
+        <button type="button" class="btn btn-small" id="theme-btn">Light mode</button>
+        <button type="button" class="btn btn-ghost btn-small" id="logout-btn">Log out</button>
+      </div>
+    </header>
+
+    <div class="workspace" id="workspace">
+      <aside class="rail" id="rail" aria-label="Computers">
+        <div class="rail-top">
+          <div class="rail-heading">
+            <span class="label">Computers</span>
+            <span class="rail-count" id="host-count">00</span>
+          </div>
+          <input id="host-filter" type="search" placeholder="Filter computers" aria-label="Filter computers" spellcheck="false">
+        </div>
+        <ul class="host-list" id="host-list"></ul>
+        <div class="rail-foot">
+          <button type="button" class="btn btn-small btn-block" id="add-host-btn">+ Add computer</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="tabs" id="tabs" role="tablist" aria-label="Sessions"></div>
+        <div class="stage" id="stage">
+          <div class="empty" id="empty-state"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="host-dialog" class="dialog">
+    <form id="host-form" method="dialog" novalidate>
+      <header class="dialog-head">
+        <span class="label" id="host-dialog-kicker">New computer</span>
+        <h2 id="host-dialog-title">Add a machine</h2>
+      </header>
+      <div class="dialog-body">
+        <label class="field">
+          <span class="label">Name</span>
+          <input name="name" required maxlength="64" placeholder="Lab NAS" autocomplete="off">
+        </label>
+        <div class="field-row">
+          <label class="field field-grow">
+            <span class="label">Address</span>
+            <input name="address" required maxlength="253" placeholder="192.168.1.20" spellcheck="false" autocomplete="off">
+          </label>
+          <label class="field field-port">
+            <span class="label">Port</span>
+            <input name="port" type="number" min="1" max="65535" value="22" inputmode="numeric">
+          </label>
+        </div>
+        <label class="field">
+          <span class="label">Username</span>
+          <input name="username" required maxlength="64" placeholder="admin" spellcheck="false" autocomplete="off">
+        </label>
+        <div class="fingerprint-box" id="host-fingerprint" hidden>
+          <span class="label">Computer ID</span>
+          <p class="hint">RemoteHub saved this the first time you connected, so it can tell if a different computer answers.</p>
+          <code id="host-fingerprint-value"></code>
+          <button type="button" class="btn btn-ghost btn-small" id="forget-fingerprint-btn">Forget this computer ID</button>
+        </div>
+        <div class="agent-box" id="host-agent" hidden>
+          <span class="label">Agent</span>
+          <p id="host-agent-status" class="agent-status">
+            <span class="dot" data-state="idle" aria-hidden="true"></span>
+            <span id="host-agent-status-label">Not set up on this computer</span>
+          </p>
+          <p id="host-agent-details" class="agent-details" hidden></p>
+          <div class="agent-actions">
+            <button type="button" class="btn btn-small" id="install-agent-btn">Install agent on this computer</button>
+            <button type="button" class="btn btn-small" id="issue-agent-btn">Create agent key</button>
+            <button type="button" class="btn btn-ghost btn-small danger" id="revoke-agent-btn" hidden>Remove agent key</button>
+          </div>
+          <div class="agent-install" id="agent-install-form" hidden>
+            <label class="field">
+              <span class="label">SSH password for this computer</span>
+              <input type="password" id="agent-install-password" autocomplete="off" spellcheck="false" maxlength="1024" aria-describedby="agent-install-note">
+            </label>
+            <p class="hint" id="agent-install-note">RemoteHub uses this once to install the agent, then forgets it. It is not stored.</p>
+            <p class="agent-trust" id="agent-install-trust" hidden></p>
+            <div class="agent-actions">
+              <button type="button" class="btn btn-primary btn-small" id="agent-install-submit">Install</button>
+              <button type="button" class="btn btn-ghost btn-small" id="agent-install-cancel">Cancel</button>
+            </div>
+            <p class="form-error" id="agent-install-error" role="alert" hidden></p>
+          </div>
+          <p class="agent-done" id="agent-install-done" role="status" hidden></p>
+          <div class="agent-token" id="host-agent-token" hidden>
+            <span class="label">Agent key (shown only once)</span>
+            <code id="host-agent-token-value"></code>
+            <p class="hint">Store this on the computer. RemoteHub will not show it again.</p>
+            <span class="label">Command to start the agent on that computer</span>
+            <code id="host-agent-command"></code>
+          </div>
+        </div>
+        <p class="hint">No password is stored. You'll type it each time you connect.</p>
+        <p class="form-error" id="host-error" role="alert" hidden></p>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn btn-ghost btn-small danger" id="delete-host-btn" hidden>Delete computer</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-small" id="host-cancel-btn">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-small" id="host-save-btn">Save computer</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="launcher-dialog" class="dialog dialog-launcher" aria-label="Jump to a computer">
+    <div class="launcher">
+      <input id="launcher-input" type="search" placeholder="Type a computer name or address" spellcheck="false" aria-label="Search computers">
+      <ul id="launcher-list" class="launcher-list" role="listbox"></ul>
+      <p class="launcher-hint"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> connect · <kbd>Esc</kbd> close</p>
+    </div>
+  </dialog>
+</body>
+</html>

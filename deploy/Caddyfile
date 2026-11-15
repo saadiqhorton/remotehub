@@ -1,0 +1,11 @@
+# Drop-in reverse proxy configs for RemoteHub.
+#
+# Replace YOUR_DOMAIN with your hostname, e.g. remotehub.example.com
+# Upstream is 127.0.0.1:8090 — the default PORT in .env.example.
+#
+# Same-machine (recommended): leave RemoteHub at HOST=127.0.0.1 and TRUST_PROXY=loopback.
+# Different machine: see ../README.md → "Behind a reverse proxy".
+
+remotehub.example.com {
+	reverse_proxy 127.0.0.1:8090
+}
