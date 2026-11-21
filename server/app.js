@@ -648,6 +648,9 @@ export async function createServer(config, { log = console.log } = {}) {
         const query = new URL(req.url, 'http://localhost').searchParams;
         const host = store.getHost(String(query.get('hostId') ?? ''));
         if (!host?.desktop) return refuse(DESKTOP_CLOSE.UNAVAILABLE, 'No desktop for this computer.');
+        const traceId = query.get('traceId');
+        const attempt = Number(query.get('attempt'));
+        const attemptCause = query.get('attemptCause');
         // SAA-305: the saved protocol must be a host capability and servable by guacd.
         const allowed = selectDesktopProtocol(viewHost(host), { [host.desktop.protocol]: protocolSupport.known(host.desktop.protocol) }, host.desktop.protocol);
         if (!allowed.protocol) return refuse(allowed.missing === 'plugin' ? DESKTOP_CLOSE.BACKEND_DOWN : DESKTOP_CLOSE.UNAVAILABLE, allowed.reason);
@@ -665,7 +668,7 @@ export async function createServer(config, { log = console.log } = {}) {
             if (result === 'changed') throw { code: RDP_CLOSE.CERT_CHANGED, reason: 'This computer looks different from last time. If you expected that, click “Trust this computer again”.' };
           },
         }) : null;
-        ws.bridge = attachDesktop(ws, { host, settings: host.desktop, guacd: config.guacd, size, fixedSize: browserFixedSize(query), log, timeouts: config.desktopTimeouts, preflight });
+        ws.bridge = attachDesktop(ws, { host, settings: host.desktop, guacd: config.guacd, size, fixedSize: browserFixedSize(query), traceId, attempt, attemptCause, log, timeouts: config.desktopTimeouts, preflight });
       });
       return;
     }

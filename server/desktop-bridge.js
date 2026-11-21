@@ -196,9 +196,14 @@ export function connectionParameters(host, settings, credentials = {}) {
  * Attach an accepted desktop WebSocket. `ws` is already authenticated.
  * @param {import('ws').WebSocket} ws
  */
-export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = false, log = () => {}, timeouts = DESKTOP_TIMEOUTS, connect = net.connect, preflight = null }) {
-  const label = `desktop host=${host.id} ${settings.protocol}`;
+export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = false, traceId, attempt, attemptCause, log = () => {}, timeouts = DESKTOP_TIMEOUTS, connect = net.connect, preflight = null }) {
+  const trace = typeof traceId === 'string' && /^[a-z0-9-]{8,64}$/i.test(traceId) ? traceId : null;
+  const attemptNo = Number.isSafeInteger(attempt) && attempt > 0 ? attempt : null;
+  const cause = ['user', 'auto-retry', 'resize-fallback'].includes(attemptCause) ? attemptCause : null;
+  const traceLabel = [trace && `trace=${trace}`, attemptNo && `attempt=${attemptNo}`, cause && `cause=${cause}`].filter(Boolean).join(' ');
+  const label = `desktop host=${host.id} ${settings.protocol}${traceLabel ? ` ${traceLabel}` : ''}`;
   const started = Date.now();
+  if (traceLabel) log(`${label} opened`);
   const fromGuacd = new InstructionStream();
   const fromBrowser = new InstructionStream();
   let phase = 'connecting'; // connecting -> select -> connect -> open -> closed
