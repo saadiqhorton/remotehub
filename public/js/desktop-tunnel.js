@@ -5,11 +5,15 @@
 // Apache's Guacamole.Parser and all protocol behavior to Guacamole.Client.
 export const DESKTOP_CLOSE = Object.freeze({ NORMAL: 1000, REMOTE_ERROR: 1011, AUTH: 4401, ORIGIN: 4403, UNAVAILABLE: 4404, CERT_CHANGED: 4409, CERT_UNAVAILABLE: 4410, BACKEND_LOST: 4502, BACKEND_DOWN: 4503 });
 
-export function desktopTunnelUrl({ host, width, height, dpi = 96, fixed = false, location = globalThis.location }) {
+export function desktopTunnelUrl({ host, width, height, dpi = 96, fixed = false, pageTraceId, traceId, attempt, attemptCause, location = globalThis.location }) {
   if (!location?.host) throw new Error('Desktop tunnel needs a page location');
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const params = new URLSearchParams({ hostId: host.id, width: String(Math.round(width)), height: String(Math.round(height)), dpi: String(dpi) });
   if (fixed) params.set('fixed', '1');
+  if (typeof pageTraceId === 'string' && /^[a-z0-9-]{8,64}$/i.test(pageTraceId)) params.set('pageTraceId', pageTraceId);
+  if (typeof traceId === 'string' && /^[a-z0-9-]{8,64}$/i.test(traceId)) params.set('traceId', traceId);
+  if (Number.isSafeInteger(attempt) && attempt > 0) params.set('attempt', String(attempt));
+  if (['user', 'auto-retry', 'resize-fallback'].includes(attemptCause)) params.set('attemptCause', attemptCause);
   return `${scheme}//${location.host}/ws/desktop?${params}`;
 }
 

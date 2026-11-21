@@ -87,6 +87,16 @@ let nextDesktopId = 0;
 // SAA-352: guacd rounds the width to even and a target may round a little more.
 function nearSize(a, width, height) { return Math.abs(a.width - width) <= 8 && Math.abs(a.height - height) <= 8; }
 
+function createDesktopTraceId() {
+  try {
+    const id = globalThis.crypto?.randomUUID?.();
+    if (typeof id === 'string' && /^[a-z0-9-]{8,64}$/i.test(id)) return id;
+  } catch { /* diagnostics must never block a connection */ }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+const PAGE_TRACE_ID = createDesktopTraceId();
+
 
 export class DesktopSession {
   #heldPassword = ''; // SAA-347: page memory only; cleared on Disconnect, close tab, logout
@@ -112,6 +122,9 @@ export class DesktopSession {
     createSoundChannel = (options) => new AgentSoundChannel(options),
   }) {
     this.id = `desktop-${++nextDesktopId}`;
+    this.pageTraceId = PAGE_TRACE_ID; // shared by every desktop session created in this page
+    this.traceId = createDesktopTraceId(); // diagnostic identity for this logical session; reused across retries
+    this.tunnelAttempt = 0;
     this.host = host;
     this.surfaceType = 'desktop';
     this.state = 'idle';
@@ -332,10 +345,11 @@ export class DesktopSession {
     this.wasLive = false;
     const typed = this.isRdp ? '' : (this.connectPassword.value || '');
     if (typed) this.#heldPassword = typed;
-    this.openTunnel();
+    this.openTunnel('user');
   }
 
-  openTunnel() {
+  openTunnel(attemptCause = 'user') {
+    const attempt = ++this.tunnelAttempt;
     this.inputCapture.exit();
     this.rdpSoundLive = false; // a new connection proves RDP sound afresh
     // A new client has no remote key state. Reset Guac's physical-key and modifier
@@ -359,7 +373,7 @@ export class DesktopSession {
     else this.setState('connecting', 'reconnecting-now', 'Reconnecting to the desktop…');
     let tunnel;
     const size = this.fixedSize ?? this.viewportSize();
-    try { tunnel = this.createTunnel({ host: this.host, ...size, dpi: 96, password, ...(this.fixedSize ? { fixed: true } : {}) }); }
+    try { tunnel = this.createTunnel({ host: this.host, ...size, dpi: 96, password, pageTraceId: this.pageTraceId, traceId: this.traceId, attempt, attemptCause, ...(this.fixedSize ? { fixed: true } : {}) }); }
     catch { this.setState('unavailable', 'no-tunnel', 'Desktop is unavailable. Reload the page and try again.'); return; }
     this.tunnel = tunnel;
     this.watchResize(size.width, size.height, { handshake: true });
@@ -416,6 +430,7 @@ export class DesktopSession {
     };
     tunnel.onclose = (event) => {
       if (this.tunnel !== tunnel) return;
+      globalThis.console?.info?.(`[RemoteHub desktop] page=${this.pageTraceId} trace=${this.traceId} attempt=${attempt} cause=${attemptCause} browser-close=${event?.code} opened=${event?.opened === true}`);
       this.inputCapture.exit();
       if (this.client) this.client.disconnect();
       this.endResizeWatch();
@@ -599,7 +614,7 @@ export class DesktopSession {
     this.cancelReconnect();
     if (this.disposed || !this.autoReconnecting || this.tunnel) return;
     this.reconnectAttempt += 1;
-    this.openTunnel();
+    this.openTunnel('auto-retry');
   }
 
   // A reconnect is pending (countdown or waiting for network) and no attempt is in flight.
@@ -1068,7 +1083,7 @@ export class DesktopSession {
     // Same as an automatic reconnect: held sign-in answers and the 5-minute budget carry over.
     if (!this.autoReconnecting) { this.budgetUsedMs = 0; this.budgetSince = Date.now(); }
     this.autoReconnecting = true;
-    this.openTunnel();
+    this.openTunnel('resize-fallback');
     this.setState('connecting', 'resize-fallback', RESIZE_FALLBACK_MESSAGE);
   }
 

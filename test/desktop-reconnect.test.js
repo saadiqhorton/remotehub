@@ -69,6 +69,11 @@ test('a recoverable drop counts down, reconnects with the held password and neve
   mock.timers.enable(FAKE);
   try {
     const { s, factory } = await readySession();
+    const firstAttempt = factory.last().options;
+    assert.match(firstAttempt.pageTraceId, /^[a-z0-9-]{8,64}$/i);
+    assert.match(firstAttempt.traceId, /^[a-z0-9-]{8,64}$/i);
+    assert.equal(firstAttempt.attempt, 1);
+    assert.equal(firstAttempt.attemptCause, 'user');
     factory.last().end(4502, 'Desktop service stopped unexpectedly.');
     assert.equal(s.state, 'connecting');
     assert.equal(s.reason, 'reconnecting');
@@ -82,11 +87,20 @@ test('a recoverable drop counts down, reconnects with the held password and neve
     mock.timers.tick((RECONNECT_DELAYS_SEC[0] - 1) * 1000);
     assert.equal(factory.made.length, 2, 'reconnected automatically');
     assert.equal(factory.last().options.password, 'pw-1', 'held password reused');
+    assert.equal(factory.last().options.pageTraceId, firstAttempt.pageTraceId);
+    assert.equal(factory.last().options.traceId, firstAttempt.traceId);
+    assert.equal(factory.last().options.attempt, 2);
+    assert.equal(factory.last().options.attemptCause, 'auto-retry');
     await live(factory.last());
     assert.equal(s.state, 'ready');
     // A second drop later starts again from the first (short) delay.
     factory.last().end(1006, '', true);
     assert.match(s.message, new RegExp(`Reconnecting in ${RECONNECT_DELAYS_SEC[0]}…`));
+    mock.timers.tick(RECONNECT_DELAYS_SEC[0] * 1000);
+    assert.equal(factory.last().options.pageTraceId, firstAttempt.pageTraceId);
+    assert.equal(factory.last().options.traceId, firstAttempt.traceId);
+    assert.equal(factory.last().options.attempt, 3);
+    assert.equal(factory.last().options.attemptCause, 'auto-retry');
     s.disconnect();
   } finally { mock.timers.reset(); }
 });

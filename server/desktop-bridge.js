@@ -196,9 +196,15 @@ export function connectionParameters(host, settings, credentials = {}) {
  * Attach an accepted desktop WebSocket. `ws` is already authenticated.
  * @param {import('ws').WebSocket} ws
  */
-export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = false, log = () => {}, timeouts = DESKTOP_TIMEOUTS, connect = net.connect, preflight = null }) {
-  const label = `desktop host=${host.id} ${settings.protocol}`;
+export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = false, pageTraceId, traceId, attempt, attemptCause, log = () => {}, timeouts = DESKTOP_TIMEOUTS, connect = net.connect, preflight = null }) {
+  const pageTrace = typeof pageTraceId === 'string' && /^[a-z0-9-]{8,64}$/i.test(pageTraceId) ? pageTraceId : null;
+  const trace = typeof traceId === 'string' && /^[a-z0-9-]{8,64}$/i.test(traceId) ? traceId : null;
+  const attemptNo = Number.isSafeInteger(attempt) && attempt > 0 ? attempt : null;
+  const cause = ['user', 'auto-retry', 'resize-fallback'].includes(attemptCause) ? attemptCause : null;
+  const traceLabel = [pageTrace && `page=${pageTrace}`, trace && `trace=${trace}`, attemptNo && `attempt=${attemptNo}`, cause && `cause=${cause}`].filter(Boolean).join(' ');
+  const label = `desktop host=${host.id} ${settings.protocol}${traceLabel ? ` ${traceLabel}` : ''}`;
   const started = Date.now();
+  if (traceLabel) log(`${label} opened`);
   const fromGuacd = new InstructionStream();
   const fromBrowser = new InstructionStream();
   let phase = 'connecting'; // connecting -> select -> connect -> open -> closed
@@ -211,20 +217,37 @@ export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = fal
   let dropped = 0; // browser instructions refused by the allow-list (counted, not logged)
   let credentials = null; // set from the browser's first message; dropped after connect
   let argNames = null;    // guacd's args list, held until credentials arrive
+  let credentialsReceived = false;
+  let preflightResolved = !preflight;
+  let connectSent = false;
+  const traceHandshake = (milestone) => log(`${label} handshake ${milestone} after ${Date.now() - started}ms`);
   // SAA-304: optional async pre-connect step (RDP certificate pin check). Resolves to
   // extra server-side params; rejects with { code, reason } to fail closed. `connect`
   // is not sent to guacd until it has resolved.
   let extraParams = preflight ? null : {};
   if (preflight) {
-    Promise.resolve().then(preflight).then((params) => { extraParams = params ?? {}; sendConnect(); },
-      (err) => finish(err?.code ?? DESKTOP_CLOSE.BACKEND_DOWN, err?.reason ?? 'Desktop pre-connect check failed.'));
+    Promise.resolve().then(preflight).then((params) => {
+      extraParams = params ?? {};
+      preflightResolved = true;
+      traceHandshake('preflight_resolved');
+      sendConnect();
+    }, (err) => {
+      traceHandshake('preflight_failed');
+      finish(err?.code ?? DESKTOP_CLOSE.BACKEND_DOWN, err?.reason ?? 'Desktop pre-connect check failed.');
+    });
   }
 
   const socket = connect({ host: guacd.host, port: guacd.port });
   socket.setNoDelay?.(true);
 
-  let phaseTimer = setTimeout(() => finish(DESKTOP_CLOSE.BACKEND_DOWN, phase === 'connecting'
-    ? 'Desktop service did not accept the connection in time.' : 'Desktop service did not finish connecting in time.'),
+  let phaseTimer = setTimeout(() => {
+    if (phase !== 'open') {
+      const timeoutKind = phase === 'connecting' ? 'tcp connect' : 'handshake';
+      log(`${label} ${timeoutKind} timeout after ${Date.now() - started}ms phase=${phase} args=${argNames !== null} credentials=${credentialsReceived} preflight=${preflightResolved} connect=${connectSent}`);
+    }
+    finish(DESKTOP_CLOSE.BACKEND_DOWN, phase === 'connecting'
+      ? 'Desktop service did not accept the connection in time.' : 'Desktop service did not finish connecting in time.');
+  },
     phase === 'connecting' ? timeouts.connectMs : timeouts.handshakeMs);
   // guacd-silence watchdog. It only counts time this process was actually running: after
   // an event-loop or host stall the timer can fire before the socket data that arrived
@@ -280,6 +303,8 @@ export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = fal
       + encode('image', 'image/png', 'image/jpeg', 'image/webp')
       + encode('connect', ...values),
     );
+    connectSent = true;
+    traceHandshake('connect_sent');
     credentials = {}; // drop the secret: used exactly once
     phase = 'connect';
   }
@@ -288,8 +313,12 @@ export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = fal
     if (closed) return;
     phase = 'select';
     clearTimeout(phaseTimer);
-    phaseTimer = setTimeout(() => finish(DESKTOP_CLOSE.BACKEND_DOWN, 'Desktop service did not finish connecting in time.'), timeouts.handshakeMs);
+    phaseTimer = setTimeout(() => {
+      log(`${label} handshake timeout after ${Date.now() - started}ms phase=${phase} args=${argNames !== null} credentials=${credentialsReceived} preflight=${preflightResolved} connect=${connectSent}`);
+      finish(DESKTOP_CLOSE.BACKEND_DOWN, 'Desktop service did not finish connecting in time.');
+    }, timeouts.handshakeMs);
     socket.write(encode('select', settings.protocol));
+    traceHandshake('select_sent');
   });
 
   socket.on('data', (chunk) => {
@@ -308,6 +337,7 @@ export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = fal
         if (opcode !== 'args') return finish(DESKTOP_CLOSE.BACKEND_DOWN, 'Desktop service sent an unexpected reply.');
         argNames = args;
         phase = 'await-credentials';
+        traceHandshake('args_received');
         sendConnect();
         continue;
       }
@@ -365,6 +395,8 @@ export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = fal
           supplied[elements[k]] = elements[k + 1];
         }
         credentials = supplied;
+        credentialsReceived = true;
+        traceHandshake('credentials_received');
         sendConnect();
         continue;
       }
@@ -402,7 +434,10 @@ export function attachDesktop(ws, { host, settings, guacd, size, fixedSize = fal
     if (phase === 'open') socket.write(out);
     else if (pendingBrowser.length < 256) pendingBrowser.push(out);
   });
-  ws.on('close', () => finish(DESKTOP_CLOSE.NORMAL, 'Browser closed the connection.'));
+  ws.on('close', (code) => {
+    if (!closed) log(`${label} browser websocket close code=${code} after ${Date.now() - started}ms phase=${phase}`);
+    finish(DESKTOP_CLOSE.NORMAL, 'Browser closed the connection.');
+  });
   ws.on('error', () => finish(DESKTOP_CLOSE.NORMAL, 'Browser connection error.'));
 
   return { close: (code = 1001, reason = 'Server shutting down') => finish(code, reason) };
