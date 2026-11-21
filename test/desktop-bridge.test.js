@@ -101,6 +101,40 @@ test('authenticated desktop: handshake uses server-held host params, relays fram
   } finally { await s.stop(); }
 });
 
+test('desktop diagnostics correlate page/session attempts across handshake and browser close without secrets', async () => {
+  const s = await setup();
+  try {
+    await s.client.request(`/api/hosts/${s.host.id}/desktop`, { method: 'PUT', body: { protocol: 'vnc' } });
+    const page = 'page-0123456789';
+    const trace = 'session-0123456789';
+    const query = `?hostId=${s.host.id}&pageTraceId=${page}&traceId=${trace}&attempt=2&attemptCause=auto-retry`;
+    const c = connectWs(s.t, query, s.client.cookie);
+    await c.until(() => c.instructions.some((i) => i[0] === 'ready'));
+    c.ws.close(1000, 'test close');
+    assert.equal((await c.closed).code, 1000);
+
+    const logs = s.logs.filter((line) => line.includes(`page=${page} trace=${trace} attempt=2 cause=auto-retry`));
+    for (const milestone of ['opened', 'select_sent', 'args_received', 'credentials_received', 'connect_sent', 'ready after', 'browser websocket close code=1000', 'closed code=1000']) {
+      assert.ok(logs.some((line) => line.includes(milestone)), `missing ${milestone}:\n${s.logs.join('\n')}`);
+    }
+    assert.ok(!s.logs.join('\n').includes(SECRET), 'diagnostic labels never include the desktop password');
+  } finally { await s.stop(); }
+});
+
+test('desktop diagnostic labels reject query values that could inject log text', async () => {
+  const s = await setup();
+  try {
+    await s.client.request(`/api/hosts/${s.host.id}/desktop`, { method: 'PUT', body: { protocol: 'vnc' } });
+    const c = connectWs(s.t, `?hostId=${s.host.id}&pageTraceId=bad%0Aforged&traceId=bad%20trace&attempt=-1&attemptCause=untrusted`, s.client.cookie);
+    await c.until(() => c.instructions.some((i) => i[0] === 'ready'));
+    c.ws.close(1000, 'test close');
+    await c.closed;
+    assert.ok(!s.logs.join('\n').includes('forged'));
+    assert.ok(!s.logs.join('\n').includes('bad trace'));
+    assert.ok(!s.logs.join('\n').includes('cause=untrusted'));
+  } finally { await s.stop(); }
+});
+
 test('mid-session: only allow-listed opcodes reach guacd, and size is clamped like the handshake', async () => {
   const s = await setup();
   try {

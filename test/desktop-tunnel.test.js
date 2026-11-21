@@ -184,3 +184,22 @@ test('tunnel URL carries only host id and size, and chooses ws/wss from page pro
   assert.equal(desktopTunnelUrl({ host: { id: 'h' }, width: 1, height: 1, location: { protocol: 'http:', host: 'a:1' } }), 'ws://a:1/ws/desktop?hostId=h&width=1&height=1&dpi=96');
   assert.throws(() => desktopTunnelUrl({ host: { id: 'h' }, width: 1, height: 1, location: {} }), /location/);
 });
+
+test('tunnel URL carries validated page, session, attempt, and cause diagnostics', () => {
+  const url = new URL(desktopTunnelUrl({
+    host: { id: 'h1' }, width: 800, height: 600,
+    pageTraceId: 'page-0123456789', traceId: 'session-0123456789', attempt: 3, attemptCause: 'auto-retry',
+    location: { protocol: 'https:', host: 'rh.lan' },
+  }));
+  assert.equal(url.searchParams.get('pageTraceId'), 'page-0123456789');
+  assert.equal(url.searchParams.get('traceId'), 'session-0123456789');
+  assert.equal(url.searchParams.get('attempt'), '3');
+  assert.equal(url.searchParams.get('attemptCause'), 'auto-retry');
+
+  const invalid = new URL(desktopTunnelUrl({
+    host: { id: 'h1' }, width: 800, height: 600,
+    pageTraceId: 'bad\npage', traceId: 'bad trace', attempt: -1, attemptCause: 'untrusted',
+    location: { protocol: 'https:', host: 'rh.lan' },
+  }));
+  for (const key of ['pageTraceId', 'traceId', 'attempt', 'attemptCause']) assert.equal(invalid.searchParams.has(key), false);
+});

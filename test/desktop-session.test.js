@@ -76,6 +76,36 @@ test('starts idle, connects on demand, sends initial password once via the tunne
   assert.equal(s.overlay.hidden, true);
 });
 
+test('desktop attempts share a page id, keep a session id, and report resize fallback cause', async () => {
+  const first = make();
+  const second = make();
+  first.s.host = { ...HOST, desktop: { protocol: 'rdp', port: 3389 } };
+  first.s.connect();
+  second.s.connect();
+
+  const firstAttempt = first.factory.last().options;
+  const secondSession = second.factory.last().options;
+  assert.match(firstAttempt.pageTraceId, /^[a-z0-9-]{8,64}$/i);
+  assert.equal(firstAttempt.pageTraceId, secondSession.pageTraceId, 'surfaces in one page share an id');
+  assert.match(firstAttempt.traceId, /^[a-z0-9-]{8,64}$/i);
+  assert.notEqual(firstAttempt.traceId, secondSession.traceId, 'each DesktopSession has its own id');
+  assert.equal(firstAttempt.attempt, 1);
+  assert.equal(firstAttempt.attemptCause, 'user');
+
+  first.factory.last().receive('ready', '$id');
+  await firstFrame(first.factory.last(), first.s);
+  first.s.fallBackToFixedSize(800, 600);
+  const fallback = first.factory.last().options;
+  assert.equal(fallback.pageTraceId, firstAttempt.pageTraceId);
+  assert.equal(fallback.traceId, firstAttempt.traceId);
+  assert.equal(fallback.attempt, 2);
+  assert.equal(fallback.attemptCause, 'resize-fallback');
+  assert.equal(fallback.fixed, true);
+
+  first.s.dispose();
+  second.s.dispose();
+});
+
 test('every documented close code maps to a distinct, sensible state', async () => {
   const expected = {
     1000: ['disconnected', 'normal'], 1003: ['failed', 'binary-frame'], 1007: ['failed', 'malformed'],
