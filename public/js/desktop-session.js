@@ -95,6 +95,8 @@ function createDesktopTraceId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+const PAGE_TRACE_ID = createDesktopTraceId();
+
 
 export class DesktopSession {
   #heldPassword = ''; // SAA-347: page memory only; cleared on Disconnect, close tab, logout
@@ -120,6 +122,7 @@ export class DesktopSession {
     createSoundChannel = (options) => new AgentSoundChannel(options),
   }) {
     this.id = `desktop-${++nextDesktopId}`;
+    this.pageTraceId = PAGE_TRACE_ID; // shared by every desktop session created in this page
     this.traceId = createDesktopTraceId(); // diagnostic identity for this logical session; reused across retries
     this.tunnelAttempt = 0;
     this.host = host;
@@ -370,7 +373,7 @@ export class DesktopSession {
     else this.setState('connecting', 'reconnecting-now', 'Reconnecting to the desktop…');
     let tunnel;
     const size = this.fixedSize ?? this.viewportSize();
-    try { tunnel = this.createTunnel({ host: this.host, ...size, dpi: 96, password, traceId: this.traceId, attempt, attemptCause, ...(this.fixedSize ? { fixed: true } : {}) }); }
+    try { tunnel = this.createTunnel({ host: this.host, ...size, dpi: 96, password, pageTraceId: this.pageTraceId, traceId: this.traceId, attempt, attemptCause, ...(this.fixedSize ? { fixed: true } : {}) }); }
     catch { this.setState('unavailable', 'no-tunnel', 'Desktop is unavailable. Reload the page and try again.'); return; }
     this.tunnel = tunnel;
     this.watchResize(size.width, size.height, { handshake: true });
@@ -427,7 +430,7 @@ export class DesktopSession {
     };
     tunnel.onclose = (event) => {
       if (this.tunnel !== tunnel) return;
-      globalThis.console?.info?.(`[RemoteHub desktop] trace=${this.traceId} attempt=${attempt} cause=${attemptCause} browser-close=${event?.code} opened=${event?.opened === true}`);
+      globalThis.console?.info?.(`[RemoteHub desktop] page=${this.pageTraceId} trace=${this.traceId} attempt=${attempt} cause=${attemptCause} browser-close=${event?.code} opened=${event?.opened === true}`);
       this.inputCapture.exit();
       if (this.client) this.client.disconnect();
       this.endResizeWatch();

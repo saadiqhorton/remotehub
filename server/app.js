@@ -648,6 +648,7 @@ export async function createServer(config, { log = console.log } = {}) {
         const query = new URL(req.url, 'http://localhost').searchParams;
         const host = store.getHost(String(query.get('hostId') ?? ''));
         if (!host?.desktop) return refuse(DESKTOP_CLOSE.UNAVAILABLE, 'No desktop for this computer.');
+        const pageTraceId = query.get('pageTraceId');
         const traceId = query.get('traceId');
         const attempt = Number(query.get('attempt'));
         const attemptCause = query.get('attemptCause');
@@ -668,7 +669,7 @@ export async function createServer(config, { log = console.log } = {}) {
             if (result === 'changed') throw { code: RDP_CLOSE.CERT_CHANGED, reason: 'This computer looks different from last time. If you expected that, click “Trust this computer again”.' };
           },
         }) : null;
-        ws.bridge = attachDesktop(ws, { host, settings: host.desktop, guacd: config.guacd, size, fixedSize: browserFixedSize(query), traceId, attempt, attemptCause, log, timeouts: config.desktopTimeouts, preflight });
+        ws.bridge = attachDesktop(ws, { host, settings: host.desktop, guacd: config.guacd, size, fixedSize: browserFixedSize(query), pageTraceId, traceId, attempt, attemptCause, log, timeouts: config.desktopTimeouts, preflight });
       });
       return;
     }
