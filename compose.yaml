@@ -1,5 +1,8 @@
 # Starts the RemoteHub server and its pinned guacd build on the hosting computer.
 # Docker is not needed on any target computer.
+# Keep one Compose stack across checkouts; worktree-derived names can collide on port 8090.
+name: remote-hub
+
 services:
   remotehub:
     build:
