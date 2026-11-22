@@ -5,10 +5,17 @@
 Install Docker Engine with the Compose plugin on the **computer that hosts RemoteHub**.
 Docker is not needed on any SSH, SFTP, RDP, or VNC target.
 
-From a fresh checkout, start the RemoteHub server and its compatible guacd build with:
+Deploy only from the canonical checkout on a clean, up-to-date `main` branch. The
+production command checks the branch, working tree, and `origin/main` commit before
+it can change the running stack. Compose uses the fixed `remote-hub` project name so
+a checkout in another worktree cannot silently start a second stack against the same
+published port.
+
+After updating that checkout with `git switch main && git pull --ff-only origin main`,
+start or update the RemoteHub server and its compatible guacd build with:
 
 ```sh
-docker compose up --build -d --wait
+bash deploy/production.sh
 ```
 
 Open <http://127.0.0.1:8090>. On the first run, RemoteHub prints a one-time setup code;
